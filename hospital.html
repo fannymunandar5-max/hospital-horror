@@ -1,0 +1,544 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Abandoned Hospital</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;overflow:hidden;background:#080a0d;color:white;font-family:Arial,sans-serif}
+#hud{position:fixed;top:12px;left:12px;z-index:3;text-shadow:0 2px 5px #000}
+#count{margin-top:7px;color:#ffe2a0}
+#hint{font-size:12px;color:#ddd;margin-top:6px;max-width:75vw}
+#message{position:fixed;top:25%;left:50%;transform:translateX(-50%);z-index:4;color:#ff6262;text-align:center;font-size:20px;text-shadow:0 0 12px red;max-width:90vw}
+#cross{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:2;pointer-events:none}
+#overlay{position:fixed;inset:0;background:#050607ed;z-index:10;display:grid;place-items:center;text-align:center;padding:20px}
+#panel{max-width:520px}
+h1{color:#d32c2c;letter-spacing:2px;text-shadow:0 0 15px #900}
+button{padding:12px;background:#781919;color:white;border:1px solid #c66;border-radius:6px;cursor:pointer}
+#mobile{display:none;position:fixed;bottom:15px;left:10px;right:10px;z-index:5;justify-content:space-between;pointer-events:none}
+.pad,.acts{display:grid;gap:5px;pointer-events:auto}
+.pad{grid-template-columns:repeat(3,45px)}
+.acts{grid-template-columns:repeat(2,65px)}
+.ctrl{height:45px;background:#222c;color:white;border:1px solid #aaa;border-radius:7px;touch-action:none}
+#look{display:none;position:fixed;right:0;top:0;width:60%;height:70%;z-index:1;touch-action:none}
+@media(pointer:coarse){#mobile{display:flex}#look{display:block}}
+</style>
+</head>
+<body>
+<div id="hud">
+  <b>THE ABANDONED HOSPITAL</b>
+  <div id="count">Kartu akses: 0/5</div>
+  <div id="hint">WASD: jalan · Mouse: lihat · F: senter · E: ambil/sembunyi · Q: mouse</div>
+</div>
+<div id="cross">+</div>
+<div id="message"></div>
+<div id="look"></div>
+
+<div id="mobile">
+  <div class="pad">
+    <span></span><button class="ctrl" data-k="w">▲</button><span></span>
+    <button class="ctrl" data-k="a">◀</button><button class="ctrl" data-k="s">▼</button><button class="ctrl" data-k="d">▶</button>
+  </div>
+  <div class="acts">
+    <button class="ctrl" id="mf">SENTER</button>
+    <button class="ctrl" id="me">SEMBUNYI</button>
+    <button class="ctrl" id="mi">AMBIL</button>
+    <button class="ctrl" id="mq">MOUSE</button>
+  </div>
+</div>
+
+<div id="overlay">
+  <div id="panel">
+    <h1 id="title">THE ABANDONED HOSPITAL</h1>
+    <p id="intro">Rumah sakit ini sudah ditinggalkan. Jelajahi kamar di kiri dan kanan koridor. Kumpulkan 5 kartu akses dan hindari monster.</p>
+    <p>PC: WASD, mouse, F, E, Q.</p>
+    <p>HP: gunakan tombol arah dan geser sisi kanan layar untuk melihat.</p>
+    <button id="start">MULAI BERMAIN</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(()=>{
+'use strict';
+
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x080a0d);
+scene.fog=new THREE.Fog(0x080a0d,24,65);
+
+const camera=new THREE.PerspectiveCamera(75,innerWidth/innerHeight,.1,150);
+const player=new THREE.Object3D();
+player.position.set(0,1.65,19);
+player.add(camera);
+scene.add(player);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true;
+renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xb8c5d3,0x201614,.65));
+
+const flashlight=new THREE.SpotLight(0xffedcf,65,26,Math.PI/7,.55,1.3);
+camera.add(flashlight);
+const flashTarget=new THREE.Object3D();
+flashTarget.position.set(0,0,-1);
+camera.add(flashTarget);
+flashlight.target=flashTarget;
+
+const mat={
+ floor:new THREE.MeshStandardMaterial({color:0x454545,roughness:1}),
+ wall:new THREE.MeshStandardMaterial({color:0x69645d,roughness:.95}),
+ outer:new THREE.MeshStandardMaterial({color:0x393b3c,roughness:1}),
+ metal:new THREE.MeshStandardMaterial({color:0x485054,metalness:.4,roughness:.65}),
+ bed:new THREE.MeshStandardMaterial({color:0x727b7c,roughness:.9}),
+ sheet:new THREE.MeshStandardMaterial({color:0xb1afa4,roughness:1}),
+ wood:new THREE.MeshStandardMaterial({color:0x4b3025,roughness:.9}),
+ cabinet:new THREE.MeshStandardMaterial({color:0x353c40,roughness:.75}),
+ handle:new THREE.MeshStandardMaterial({color:0xc2b68b,metalness:.7}),
+ card:new THREE.MeshStandardMaterial({color:0x48edff,emissive:0x08bde5,emissiveIntensity:2.5}),
+ red:new THREE.MeshStandardMaterial({color:0x63191b,roughness:.8}),
+ black:new THREE.MeshStandardMaterial({color:0x100909,roughness:1})
+};
+
+// Collider berbentuk kotak.
+const solids=[];
+function block(x,y,z,w,h,d,material,solid=true){
+ const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material);
+ mesh.position.set(x,y,z);
+ mesh.castShadow=true;
+ mesh.receiveShadow=true;
+ scene.add(mesh);
+ if(solid)solids.push({x,z,w,d});
+ return mesh;
+}
+function floor(x,z,w,d){
+ block(x,-.16,z,w,.32,d,mat.floor,false);
+}
+function wall(x,z,w,d,h=3.5,material=mat.wall){
+ block(x,h/2,z,w,h,d,material,true);
+}
+function light(x,y,z,intensity=.5,range=10){
+ const l=new THREE.PointLight(0xc9d8e8,intensity,range);
+ l.position.set(x,y,z);
+ scene.add(l);
+ lamps.push(l);
+ return l;
+}
+
+const lamps=[];
+const cabinets=[];
+const cards=[];
+const beds=[];
+const keys={};
+const roomCenters=[-15,-5,5,15];
+let yaw=0,pitch=0;
+let started=false,ended=false,hidden=false;
+let hidePosition=null;
+let flashlightOn=true;
+let collected=0;
+let monsterActive=false;
+let messageTimer=0;
+let lastTime=performance.now();
+let scareCooldown=0;
+let exitDoor;
+
+function buildBed(x,z){
+ // Kasur, bantal, rangka dan kaki.
+ block(x,.47,z,1.45,.22,2.15,mat.metal);
+ block(x,.63,z,1.35,.13,2.02,mat.sheet,false);
+ block(x,.73,z-.68,.8,.12,.45,mat.sheet,false);
+ for(const dx of [-.58,.58]){
+  for(const dz of [-.85,.85]){
+   block(x+dx,.22,z+dz,.09,.44,.09,mat.metal);
+  }
+ }
+ beds.push({x,z});
+}
+
+function buildCabinet(x,z){
+ // Badan lemari besar yang berdiri, bukan ikon datar.
+ block(x,.98,z,.95,1.96,.8,mat.cabinet);
+ // Pintu depan lemari.
+ block(x,.99,z-.415,.81,1.78,.055,mat.wood,false);
+ // Garis pemisah dua pintu.
+ block(x,.99,z-.45,.025,1.72,.025,mat.cabinet,false);
+ // Gagang pintu.
+ block(x-.2,1,z-.47,.045,.15,.045,mat.handle,false);
+ block(x+.2,1,z-.47,.045,.15,.045,mat.handle,false);
+ // Bagian atas lemari.
+ block(x,1.99,z,.99,.09,.84,mat.wood,false);
+ cabinets.push({x,z});
+}
+
+function buildRoom(cx,cz,side){
+ const w=8,d=8;
+ const innerX=side<0?cx+w/2:cx-w/2;
+ const outerX=side<0?cx-w/2:cx+w/2;
+
+ floor(cx,cz,w,d);
+
+ // Dinding depan dan belakang kamar.
+ wall(cx,cz-d/2,w,.2);
+ wall(cx,cz+d/2,w,.2);
+
+ // Dinding luar kamar.
+ wall(outerX,cz,.2,d);
+
+ // Dinding yang menghadap koridor dibuat terpisah.
+ // Bukaan tengah selebar 2.6 unit adalah pintu kamar.
+ const wallLength=(d-2.6)/2;
+ wall(innerX,cz-(1.3+wallLength/2),.2,wallLength);
+ wall(innerX,cz+(1.3+wallLength/2),.2,wallLength);
+
+ // Kusen pintu yang jelas terlihat.
+ block(innerX,1.45,cz-.0,.18,2.9,.18,mat.metal,false);
+ block(innerX,1.45,cz,.18,2.9,.18,mat.metal,false);
+ block(innerX,3.0,cz, .22,.16,2.8,mat.metal,false);
+
+ // Isi ruangan: kasur, lemari, meja dan lampu.
+ buildBed(cx+(side<0?1.1:-1.1),cz-1);
+ buildCabinet(cx+(side<0?-2.4:2.4),cz-1);
+ block(cx, .55,cz+1.9,1.25,1.1,.7,mat.wood);
+ block(cx,.25,cz+1.9,1.3,.12,.75,mat.metal);
+ light(cx,2.8,cz,.35,8);
+}
+
+// Bangun koridor dan dinding ujungnya.
+floor(0,0,12,50);
+wall(0,-25,12,.25);
+wall(0,25,12,.25);
+
+// Dinding koridor kiri dan kanan dibuat dengan bukaan pada pintu kamar.
+// Setiap bukaan berpusat di posisi kamar.
+function buildCorridorSide(x){
+ let cursor=-25;
+ const halfOpening=1.4;
+ for(const z of roomCenters){
+  const start=z-halfOpening;
+  const end=z+halfOpening;
+  if(start>cursor)wall(x,(cursor+start)/2,.22,start-cursor);
+  cursor=end;
+ }
+ if(cursor<25)wall(x,(cursor+25)/2,.22,25-cursor);
+}
+buildCorridorSide(-6);
+buildCorridorSide(6);
+
+// Buat semua kamar setelah dinding koridor.
+// Pintu kamar tepat sejajar dengan bukaan di dinding koridor.
+for(const z of roomCenters){
+ buildRoom(-10,z,-1);
+ buildRoom(10,z,1);
+}
+
+// Lampu koridor.
+for(let z=-21;z<=21;z+=6){
+ light(0,3,z,.9,13);
+ // Panel lampu di plafon.
+ block(0,3.35,z,.75,.08,.4,mat.sheet,false);
+}
+
+// Pintu keluar di ujung koridor.
+exitDoor=block(0,1.5,-24.55,2.6,3,.22,mat.red);
+block(-1.45,1.5,-24.55,.15,3,.35,mat.metal);
+block(1.45,1.5,-24.55,.15,3,.35,mat.metal);
+block(0,3.05,-24.55,3,.15,.35,mat.metal);
+
+// Kartu akses bercahaya.
+function addCard(x,z){
+ const group=new THREE.Group();
+ const body=new THREE.Mesh(new THREE.BoxGeometry(.43,.065,.28),mat.card);
+ group.add(body);
+ const glow=new THREE.PointLight(0x22ddff,2,3.8);
+ glow.position.y=.25;
+ group.add(glow);
+ group.position.set(x,.95,z);
+ scene.add(group);
+ cards.push({group,got:false});
+}
+addCard(-10,-15);
+addCard(10,-5);
+addCard(-10,5);
+addCard(10,15);
+addCard(0,-20);
+
+// Monster humanoid.
+const monster=new THREE.Group();
+scene.add(monster);
+function monsterPart(geometry,x,y,z,material){
+ const o=new THREE.Mesh(geometry,material);
+ o.position.set(x,y,z);
+ o.castShadow=true;
+ monster.add(o);
+ return o;
+}
+monsterPart(new THREE.BoxGeometry(.8,1.25,.45),0,1.12,0,mat.black);
+monsterPart(new THREE.SphereGeometry(.35,14,12),0,1.98,0,mat.black);
+const eyesMat=new THREE.MeshBasicMaterial({color:0xff1010});
+monsterPart(new THREE.SphereGeometry(.055,8,8),-.13,2.02,-.31,eyesMat);
+monsterPart(new THREE.SphereGeometry(.055,8,8),.13,2.02,-.31,eyesMat);
+monsterPart(new THREE.BoxGeometry(.23,.8,.25),-.27,.4,0,mat.black);
+monsterPart(new THREE.BoxGeometry(.23,.8,.25),.27,.4,0,mat.black);
+monster.position.set(0,0,-21);
+
+function showMessage(text,seconds=2){
+ document.getElementById('message').textContent=text;
+ messageTimer=seconds;
+}
+function updateHUD(){
+ document.getElementById('count').textContent=
+ 'Kartu akses: '+collected+'/5'+(hidden?' · BERSEMBUNYI':'');
+}
+
+function collides(x,z,r=.3){
+ for(const o of solids){
+  if(Math.abs(x-o.x)<o.w/2+r && Math.abs(z-o.z)<o.d/2+r)return true;
+ }
+ return false;
+}
+
+// Kontrol keyboard.
+addEventListener('keydown',e=>{
+ const k=e.key.toLowerCase();
+ keys[k]=true;
+ if(['w','a','s','d','arrowup','arrowdown','arrowleft','arrowright',' '].includes(k))e.preventDefault();
+ if(k==='f')toggleFlashlight();
+ if(k==='e')interact();
+ if(k==='q')toggleMouse();
+});
+addEventListener('keyup',e=>{keys[e.key.toLowerCase()]=false});
+
+function toggleFlashlight(){
+ flashlightOn=!flashlightOn;
+ flashlight.visible=flashlightOn;
+ showMessage(flashlightOn?'Senter menyala':'Senter mati',1);
+}
+function toggleMouse(){
+ if(document.pointerLockElement)document.exitPointerLock();
+ else renderer.domElement.requestPointerLock?.();
+}
+renderer.domElement.addEventListener('click',()=>{
+ if(started&&!ended&&matchMedia('(pointer:fine)').matches){
+  renderer.domElement.requestPointerLock?.();
+ }
+});
+document.addEventListener('mousemove',e=>{
+ if(document.pointerLockElement!==renderer.domElement||!started||ended||hidden)return;
+ yaw-=e.movementX*.0022;
+ pitch-=e.movementY*.0022;
+ pitch=Math.max(-1.35,Math.min(1.35,pitch));
+ player.rotation.y=yaw;
+ camera.rotation.x=pitch;
+});
+
+// Kontrol sentuh.
+document.querySelectorAll('[data-k]').forEach(btn=>{
+ const k=btn.dataset.k;
+ btn.addEventListener('pointerdown',e=>{
+  e.preventDefault();keys[k]=true;
+ });
+ for(const ev of ['pointerup','pointercancel','pointerleave']){
+  btn.addEventListener(ev,()=>keys[k]=false);
+ }
+});
+document.getElementById('mf').onclick=toggleFlashlight;
+document.getElementById('me').onclick=()=>interact(true);
+document.getElementById('mi').onclick=()=>interact(false);
+document.getElementById('mq').onclick=toggleMouse;
+
+// Geser layar bagian kanan untuk melihat sekitar.
+const look=document.getElementById('look');
+let touchLook=null;
+look.addEventListener('pointerdown',e=>{
+ touchLook={x:e.clientX,y:e.clientY,id:e.pointerId};
+ look.setPointerCapture(e.pointerId);
+});
+look.addEventListener('pointermove',e=>{
+ if(!touchLook||touchLook.id!==e.pointerId||!started||ended||hidden)return;
+ yaw-=(e.clientX-touchLook.x)*.006;
+ pitch-=(e.clientY-touchLook.y)*.006;
+ pitch=Math.max(-1.35,Math.min(1.35,pitch));
+ player.rotation.y=yaw;
+ camera.rotation.x=pitch;
+ touchLook.x=e.clientX;
+ touchLook.y=e.clientY;
+});
+look.addEventListener('pointerup',()=>touchLook=null);
+look.addEventListener('pointercancel',()=>touchLook=null);
+
+function interact(forceHide=false){
+ if(!started||ended)return;
+
+ if(hidden){
+  hidden=false;
+  if(hidePosition)player.position.copy(hidePosition);
+  hidePosition=null;
+  updateHUD();
+  showMessage('Kamu keluar dari lemari.',1.5);
+  return;
+ }
+
+ // Cari kartu terdekat.
+ let nearestCard=null,cardDistance=1.8;
+ for(const c of cards){
+  if(c.got)continue;
+  const d=player.position.distanceTo(c.group.position);
+  if(d<cardDistance){cardDistance=d;nearestCard=c}
+ }
+ if(nearestCard&&!forceHide){
+  nearestCard.got=true;
+  scene.remove(nearestCard.group);
+  collected++;
+  updateHUD();
+  showMessage(collected===5?'Semua kartu terkumpul! Cari pintu keluar!':'Kartu akses berhasil diambil!',2);
+  return;
+ }
+
+ // Cari lemari terdekat.
+ let nearestCabinet=null,cabinetDistance=2.5;
+ for(const c of cabinets){
+  const d=Math.hypot(player.position.x-c.x,player.position.z-c.z);
+  if(d<cabinetDistance){cabinetDistance=d;nearestCabinet=c}
+ }
+ if(nearestCabinet){
+  hidePosition=player.position.clone();
+  hidden=true;
+  // Pindahkan pemain ke posisi aman di dalam lemari.
+  player.position.set(nearestCabinet.x,1.65,nearestCabinet.z);
+  updateHUD();
+  showMessage('Kamu bersembunyi! Tekan E untuk keluar.',2);
+  return;
+ }
+
+ if(Math.hypot(player.position.x,player.position.z+24.55)<3.5){
+  if(collected>=5){
+   winGame();
+  }else{
+   showMessage('Pintu terkunci! Masih perlu '+(5-collected)+' kartu.',2);
+  }
+  return;
+ }
+
+ showMessage('Dekati kartu untuk mengambil atau lemari untuk sembunyi.',2);
+}
+
+// W maju, S mundur, A kiri, D kanan.
+function movePlayer(dt){
+ if(hidden||ended)return;
+ let forward=0,right=0;
+ if(keys.w||keys.arrowup)forward++;
+ if(keys.s||keys.arrowdown)forward--;
+ if(keys.d||keys.arrowright)right++;
+ if(keys.a||keys.arrowleft)right--;
+ const len=Math.hypot(forward,right);
+ if(!len)return;
+ forward/=len;
+ right/=len;
+ const speed=keys.shift?4.7:3.2;
+ const dx=(-Math.sin(yaw)*forward+Math.cos(yaw)*right)*speed*dt;
+ const dz=(-Math.cos(yaw)*forward-Math.sin(yaw)*right)*speed*dt;
+ const nx=player.position.x+dx;
+ const nz=player.position.z+dz;
+ if(!collides(nx,player.position.z))player.position.x=nx;
+ if(!collides(player.position.x,nz))player.position.z=nz;
+ player.position.x=THREE.MathUtils.clamp(player.position.x,-17,17);
+ player.position.z=THREE.MathUtils.clamp(player.position.z,-24,24);
+}
+
+function winGame(){
+ ended=true;
+ document.exitPointerLock?.();
+ document.getElementById('overlay').style.display='grid';
+ document.getElementById('title').textContent='KAMU BERHASIL KABUR!';
+ document.getElementById('intro').textContent='Kamu menemukan semua kartu akses dan berhasil keluar dari rumah sakit.';
+ document.getElementById('start').textContent='MAIN LAGI';
+}
+
+function jumpscare(){
+ ended=true;
+ document.exitPointerLock?.();
+ document.getElementById('overlay').style.display='grid';
+ document.getElementById('overlay').style.background='#260000f5';
+ document.getElementById('title').textContent='DIA MENEMUKANMU!';
+ document.getElementById('intro').textContent='Monster menangkapmu. Coba lagi dan manfaatkan lemari untuk bersembunyi.';
+ document.getElementById('start').textContent='COBA LAGI';
+}
+
+function updateMonster(dt){
+ if(!monsterActive||ended||hidden)return;
+ const dx=player.position.x-monster.position.x;
+ const dz=player.position.z-monster.position.z;
+ const distance=Math.hypot(dx,dz);
+ if(distance>.1){
+  const speed=collected>=5?2:1.15;
+  const nx=monster.position.x+dx/distance*speed*dt;
+  const nz=monster.position.z+dz/distance*speed*dt;
+  if(!collides(nx,monster.position.z,.3))monster.position.x=nx;
+  if(!collides(monster.position.x,nz,.3))monster.position.z=nz;
+  monster.rotation.y=Math.atan2(dx,dz);
+ }
+ if(distance<1.35&&scareCooldown<=0){
+  scareCooldown=3;
+  jumpscare();
+ }
+}
+
+function animate(now){
+ requestAnimationFrame(animate);
+ const dt=Math.min((now-lastTime)/1000,.05);
+ lastTime=now;
+
+ if(started&&!ended){
+  movePlayer(dt);
+
+  for(const c of cards){
+   if(c.got)continue;
+   c.group.rotation.y+=dt;
+   c.group.position.y=.95+Math.sin(now*.003+c.group.position.x)*.09;
+   if(player.position.distanceTo(c.group.position)<1.4){
+    showMessage('Kartu dekat! Tekan E untuk mengambil.',.6);
+   }
+  }
+
+  updateMonster(dt);
+
+  if(messageTimer>0){
+   messageTimer-=dt;
+   if(messageTimer<=0)document.getElementById('message').textContent='';
+  }
+  if(scareCooldown>0)scareCooldown-=dt;
+
+  for(const l of lamps){
+   if(Math.random()<.012)l.intensity=Math.random()<.25?.08:.55;
+  }
+ }
+ renderer.render(scene,camera);
+}
+
+document.getElementById('start').onclick=()=>{
+ if(ended){location.reload();return}
+ started=true;
+ monsterActive=true;
+ document.getElementById('overlay').style.display='none';
+ showMessage('Jelajahi kamar kiri dan kanan. Cari 5 kartu!',3);
+ if(matchMedia('(pointer:fine)').matches){
+  renderer.domElement.requestPointerLock?.();
+ }
+};
+
+addEventListener('resize',()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+});
+
+animate(performance.now());
+})();
+</script>
+</body>
+</html>
